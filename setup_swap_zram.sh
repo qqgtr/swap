@@ -63,12 +63,28 @@ uninstall() {
     fi
 
     # 2. 手动关闭 ZRAM swap
-    if zramctl --noheadings 2>/dev/null | grep -q .; then
-        echo "⏳ 关闭 ZRAM 设备..."
-        for dev in $(zramctl --noheadings -o NAME 2>/dev/null); do
-            swapoff "/dev/$dev" 2>/dev/null
-            zramctl --reset "/dev/$dev" 2>/dev/null
-        done
+    if $ZRAMCTL_AVAILABLE; then
+        if zramctl --noheadings 2>/dev/null | grep -q .; then
+            echo "⏳ 关闭 ZRAM 设备..."
+            for dev in $(zramctl --noheadings -o NAME 2>/dev/null); do
+                swapoff "/dev/$dev" 2>/dev/null
+                zramctl --reset "/dev/$dev" 2>/dev/null
+            done
+        fi
+    else
+        # sysfs 方式清理 ZRAM
+        if swapon --show 2>/dev/null | grep -q "zram"; then
+            echo "⏳ 关闭 ZRAM 设备..."
+            tail -n +2 /proc/swaps | while read -r swapdev size used prio type; do
+                case "$swapdev" in
+                    /dev/zram*)
+                        swapoff "$swapdev" 2>/dev/null
+                        devname=$(basename "$swapdev")
+                        echo 1 > /sys/block/$devname/reset 2>/dev/null
+                        ;;
+                esac
+            done
+        fi
     fi
 
     # 3. 删除 Systemd 服务文件
@@ -377,8 +393,9 @@ echo "✅ 磁盘 Swap 配置完成。"
 echo "⏳ 正在配置 ZRAM..."
 
 # 确保内核模块已加载
-modprobe zram
-if ! lsmod | grep -q zram; then
+modprobe zram 2>/dev/null
+# 检测 zram 是否可用（可能已编译进内核或作为模块）
+if ! lsmod | grep -q zram 2>/dev/null && [ ! -e /dev/zram0 ]; then
     echo "❌ 错误: 无法加载 zram 内核模块。您的内核可能不支持。"
     exit 1
 fi
@@ -415,9 +432,17 @@ else
 ZRAM_MB=$1
 modprobe zram
 ZRAM_DEV="/dev/zram0"
-# 手动设置大小和算法
-echo zstd > /sys/block/zram0/comp_algorithm 2>/dev/null || \
-echo lzo-rle > /sys/block/zram0/comp_algorithm 2>/dev/null
+# 选择可用的压缩算法
+AVAILABLE_ALGO=$(cat /sys/block/zram0/comp_algorithm 2>/dev/null)
+if echo "$AVAILABLE_ALGO" | grep -q "zstd"; then
+    echo zstd > /sys/block/zram0/comp_algorithm
+elif echo "$AVAILABLE_ALGO" | grep -q "lzo-rle"; then
+    echo lzo-rle > /sys/block/zram0/comp_algorithm
+elif echo "$AVAILABLE_ALGO" | grep -q "lzo"; then
+    echo lzo > /sys/block/zram0/comp_algorithm
+else
+    echo lzo > /sys/block/zram0/comp_algorithm
+fi
 echo ${ZRAM_MB}M > /sys/block/zram0/disksize
 mkswap $ZRAM_DEV
 swapon $ZRAM_DEV -p 100
@@ -473,7 +498,9 @@ vm.page-cluster=0
 vm.vfs_cache_pressure=50
 EOF
 
-sysctl -p $SYSCTL_CONF
+sysctl -p $SYSCTL_CONF 2>/dev/null || {
+    echo "⚠️  警告: 内核参数应用失败，请检查 sysctl 配置。"
+}
 
 echo ""
 echo "=========================================="
