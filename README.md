@@ -9,6 +9,36 @@
 - **删除卸载** - 完全清除所有配置
 - **验证配置** - 检查当前 ZRAM 和 Swap 运行状态
 
+## 使用方法
+
+### 一键安装并运行
+
+```bash
+curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh && sudo bash setup_swap_zram.sh
+```
+
+或分步执行：
+
+```bash
+# 1. 下载脚本
+curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh
+
+# 2. 赋予执行权限
+chmod +x setup_swap_zram.sh
+
+# 3. 运行脚本（需 root 权限）
+sudo ./setup_swap_zram.sh
+```
+
+### 菜单选项
+
+```
+1) 自动模式（使用推荐值，一键配置）
+2) 自定义配置（手动输入大小）
+3) 验证配置（检查当前状态）
+4) 删除卸载（清除所有配置）
+```
+
 ## 支持系统
 
 ### 支持的主流发行版
@@ -52,36 +82,6 @@
 | < 2GB   | 内存的 50%  | 内存 × 2  |
 | 2GB~8GB | 内存的 50%  | 等于内存  |
 | > 8GB   | 内存的 50%  | 固定 8GB  |
-
-## 使用方法
-
-### 一键安装并运行
-
-```bash
-curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh && sudo bash setup_swap_zram.sh
-```
-
-或分步执行：
-
-```bash
-# 1. 下载脚本
-curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh
-
-# 2. 赋予执行权限
-chmod +x setup_swap_zram.sh
-
-# 3. 运行脚本（需 root 权限）
-sudo ./setup_swap_zram.sh
-```
-
-### 菜单选项
-
-```
-1) 自动模式（使用推荐值，一键配置）
-2) 自定义配置（手动输入大小）
-3) 验证配置（检查当前状态）
-4) 删除卸载（清除所有配置）
-```
 
 ## 配置内容
 
