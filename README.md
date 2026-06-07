@@ -11,7 +11,7 @@
 
 ## 使用方法
 
-### 国内用户
+### 国内使用
 
 **自动安装（一键）：**
 ```bash
@@ -30,7 +30,7 @@ chmod +x setup_swap_zram.sh
 sudo ./setup_swap_zram.sh
 ```
 
-### 海外用户
+### 海外使用
 
 **自动安装（一键）：**
 ```bash
