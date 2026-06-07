@@ -29,13 +29,6 @@
 | Tencent Cloud Linux (TencentOS) | 3+ | ✅ |
 | Amazon Linux | 2+ | ✅ |
 
-### 支持的容器/虚拟化环境
-
-- **VMware / VirtualBox / KVM / Hyper-V** 虚拟机
-- **云服务器**（阿里云、腾讯云、AWS、华为云等）
-
-> ⚠️ **Docker / Podman 容器：** 此脚本应在**宿主机**上运行，不推荐在容器内运行。
-
 ### 不支持的环境
 
 - Windows / macOS（非 Linux 系统）
