@@ -18,6 +18,34 @@ if [ "$EUID" -ne 0 ]; then
   exit 1
 fi
 
+# 2. 检查 Systemd 是否运行中
+if [ ! -d /run/systemd/system ]; then
+  echo "❌ 错误: 未检测到 Systemd，此脚本仅支持 Systemd 系统。"
+  echo "   不支持 OpenVZ/LXC 容器、SysVinit 或 Upstart 系统。"
+  exit 1
+fi
+
+# 3. 检查内核是否支持 ZRAM
+if ! grep -q zram /proc/modules 2>/dev/null && ! modprobe --dry-run zram 2>/dev/null; then
+  echo "❌ 错误: 内核不支持 zram 模块。"
+  echo "   您的系统内核可能未编译 zram 支持，或容器环境限制。"
+  exit 1
+fi
+
+# 4. 检查 ZRAM 管理工具
+if command -v zramctl &>/dev/null; then
+  ZRAMCTL_AVAILABLE=true
+else
+  ZRAMCTL_AVAILABLE=false
+fi
+
+# 5. 检查 dd 是否支持 status=progress
+if dd if=/dev/zero of=/dev/null bs=1M count=0 status=progress 2>/dev/null; then
+  DD_PROGRESS=true
+else
+  DD_PROGRESS=false
+fi
+
 # ==========================================
 # 删除/卸载函数
 # ==========================================
@@ -130,7 +158,7 @@ verify() {
     echo ""
     echo "▶ ZRAM 压缩交换"
     ZRAM_ACTIVE=false
-    if command -v zramctl &>/dev/null; then
+    if $ZRAMCTL_AVAILABLE; then
         ZRAM_COUNT=$(zramctl --noheadings 2>/dev/null | wc -l)
         if [ "$ZRAM_COUNT" -gt 0 ]; then
             ZRAM_ACTIVE=true
@@ -324,8 +352,11 @@ if grep -q "$SWAP_FILE" /proc/swaps; then
 fi
 
 echo "⏳ 正在创建磁盘 Swap 文件 ($SWAP_FILE)..."
-# 使用 dd 命令创建文件 (兼容性最好，比 fallocate 更安全地支持所有文件系统)
-dd if=/dev/zero of=$SWAP_FILE bs=1M count=$SWAP_MB status=progress
+if $DD_PROGRESS; then
+    dd if=/dev/zero of=$SWAP_FILE bs=1M count=$SWAP_MB status=progress
+else
+    dd if=/dev/zero of=$SWAP_FILE bs=1M count=$SWAP_MB
+fi
 chmod 600 $SWAP_FILE
 mkswap $SWAP_FILE
 # 设置低优先级 10
@@ -353,7 +384,8 @@ if ! lsmod | grep -q zram; then
 fi
 
 # 创建 ZRAM 开机自启服务 (Systemd)
-cat > /usr/local/bin/zram-start.sh << 'EOF'
+if $ZRAMCTL_AVAILABLE; then
+    cat > /usr/local/bin/zram-start.sh << 'EOF'
 #!/bin/bash
 ZRAM_MB=$1
 modprobe zram
@@ -367,7 +399,7 @@ swapon $ZRAM_DEV -p 100
 echo $ZRAM_DEV > /var/run/zram_dev_name
 EOF
 
-cat > /usr/local/bin/zram-stop.sh << 'EOF'
+    cat > /usr/local/bin/zram-stop.sh << 'EOF'
 #!/bin/bash
 if [ -f /var/run/zram_dev_name ]; then
     ZRAM_DEV=$(cat /var/run/zram_dev_name)
@@ -376,6 +408,32 @@ if [ -f /var/run/zram_dev_name ]; then
     rm -f /var/run/zram_dev_name
 fi
 EOF
+else
+    # 不支持 zramctl 时的备用方案（通过 sysfs 手动设置）
+    cat > /usr/local/bin/zram-start.sh << 'EOF'
+#!/bin/bash
+ZRAM_MB=$1
+modprobe zram
+ZRAM_DEV="/dev/zram0"
+# 手动设置大小和算法
+echo zstd > /sys/block/zram0/comp_algorithm 2>/dev/null || \
+echo lzo-rle > /sys/block/zram0/comp_algorithm 2>/dev/null
+echo ${ZRAM_MB}M > /sys/block/zram0/disksize
+mkswap $ZRAM_DEV
+swapon $ZRAM_DEV -p 100
+echo zram0 > /var/run/zram_dev_name
+EOF
+
+    cat > /usr/local/bin/zram-stop.sh << 'EOF'
+#!/bin/bash
+if [ -f /var/run/zram_dev_name ]; then
+    ZRAM_DEV=$(cat /var/run/zram_dev_name)
+    swapoff /dev/$ZRAM_DEV
+    echo 1 > /sys/block/$ZRAM_DEV/reset
+    rm -f /var/run/zram_dev_name
+fi
+EOF
+fi
 
 chmod +x /usr/local/bin/zram-start.sh
 chmod +x /usr/local/bin/zram-stop.sh
@@ -436,7 +494,7 @@ fi
 
 # 2. 验证 ZRAM
 ZRAM_OK=true
-if command -v zramctl &>/dev/null; then
+if $ZRAMCTL_AVAILABLE; then
     if zramctl --noheadings 2>/dev/null | grep -q .; then
         ZRAM_TOTAL=$(zramctl --noheadings | awk '{sum+=$2} END {printf "%.1f", sum/1024/1024}')
         echo "  ✅ ZRAM 已启用 - 总计 ${ZRAM_TOTAL}MB"
