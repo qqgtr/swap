@@ -13,12 +13,31 @@
 
 ### 一键安装并运行
 
+**国内用户：**
+```bash
+curl -sSL https://gh-proxy.org/https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh && sudo bash setup_swap_zram.sh
+```
+
+**海外用户：**
 ```bash
 curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh && sudo bash setup_swap_zram.sh
 ```
 
 或分步执行：
 
+**国内用户：**
+```bash
+# 1. 下载脚本
+curl -sSL https://gh-proxy.org/https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh
+
+# 2. 赋予执行权限
+chmod +x setup_swap_zram.sh
+
+# 3. 运行脚本（需 root 权限）
+sudo ./setup_swap_zram.sh
+```
+
+**海外用户：**
 ```bash
 # 1. 下载脚本
 curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh
