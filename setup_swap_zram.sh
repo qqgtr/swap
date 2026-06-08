@@ -1,4 +1,6 @@
 #!/bin/bash
+# 严格模式：捕获未定义变量和管道错误，但允许命令自然失败（用于交互/探测）
+set -uo pipefail
 
 # ==========================================
 # Linux 一键配置/卸载 ZRAM 与 Swap 脚本
@@ -11,6 +13,52 @@ SYSCTL_CONF="/etc/sysctl.d/99-zram-swap.conf"
 ZRAM_SERVICE="/etc/systemd/system/zram-auto.service"
 ZRAM_START="/usr/local/bin/zram-start.sh"
 ZRAM_STOP="/usr/local/bin/zram-stop.sh"
+
+# ==========================================
+# 安全辅助函数
+# ==========================================
+
+# 验证输入是否为正整数（防注入）
+validate_positive_int() {
+    local input="$1"
+    local name="$2"
+    if ! [[ "$input" =~ ^[0-9]+$ ]] || [ "$input" -le 0 ]; then
+        echo "❌ 错误: ${name} 必须是正整数，当前值: '${input}'"
+        exit 1
+    fi
+}
+
+# 安全地编辑 fstab（防 sed 注入）
+safe_fstab_remove() {
+    local swap_path="$1"
+    local fstab_file="$2"
+    # 使用 awk 进行固定字符串匹配和删除，避免正则注入
+    # 只删除以 swap_path 开头且包含 swap 字段的行
+    local tmp_file="${fstab_file}.tmp.$$"
+    awk -v path="$swap_path" '{
+        # 检查行是否以路径开头且包含 swap 字段
+        if (index($0, path) == 1 && $0 ~ /[[:space:]]swap[[:space:]]/) {
+            next  # 跳过此行
+        }
+        print
+    }' "$fstab_file" > "$tmp_file"
+    # 原子性替换
+    mv "$tmp_file" "$fstab_file"
+}
+
+# 安全更新 fstab 条目
+safe_fstab_update() {
+    local swap_path="$1"
+    local new_entry="$2"
+    local fstab_file="$3"
+    # 使用固定字符串匹配更新，非正则
+    if grep -qF "$swap_path" "$fstab_file" 2>/dev/null; then
+        # 先删除旧条目
+        safe_fstab_remove "$swap_path" "$fstab_file"
+    fi
+    # 添加新条目
+    echo "$new_entry" >> "$fstab_file"
+}
 
 # 1. 检查是否为 root 用户
 if [ "$EUID" -ne 0 ]; then
@@ -118,10 +166,10 @@ uninstall() {
         rm -f "$SWAP_FILE"
     fi
 
-    # 7. 从 /etc/fstab 移除 Swap 文件条目
-    if grep -q "$SWAP_FILE" /etc/fstab 2>/dev/null; then
+    # 7. 从 /etc/fstab 移除 Swap 文件条目（精确匹配，防误删）
+    if grep -qF "$SWAP_FILE" /etc/fstab 2>/dev/null; then
         echo "🗑️ 从 /etc/fstab 移除 Swap 条目..."
-        sed -i "\|$SWAP_FILE|d" /etc/fstab
+        safe_fstab_remove "$SWAP_FILE" /etc/fstab
     fi
 
     # 8. 删除 sysctl 配置
@@ -249,9 +297,10 @@ verify() {
 
     # 汇总
     echo ""
+    TOTAL_CHECKS=$((PASS + FAIL))
     echo "=========================================="
     if [ "$FAIL" -eq 0 ]; then
-        echo "🎉 所有检查项均通过！(${PASS}/${PASS} 项)"
+        echo "🎉 所有检查项均通过！(${PASS}/${TOTAL_CHECKS} 项)"
     else
         echo "⚠️  通过: ${PASS} 项 | 失败: ${FAIL} 项"
     fi
@@ -276,6 +325,13 @@ read -p "请选择操作 (1/2/3/4): " ACTION
 
 case $ACTION in
     4)
+        # 卸载确认（防误操作）
+        echo ""
+        read -p "⚠️  确定要卸载所有 ZRAM 和 Swap 配置吗？(y/N): " CONFIRM
+        if [[ "$CONFIRM" != "y" && "$CONFIRM" != "Y" ]]; then
+            echo "已取消卸载。"
+            exit 0
+        fi
         uninstall
         ;;
     3)
@@ -312,6 +368,7 @@ case $ACTION in
             ZRAM_MB=$DEFAULT_ZRAM_MB
             echo "    → 使用推荐值: ${ZRAM_MB} MB"
         else
+            validate_positive_int "$INPUT_ZRAM" "ZRAM 大小"
             ZRAM_MB=$INPUT_ZRAM
         fi
 
@@ -320,6 +377,7 @@ case $ACTION in
             SWAP_MB=$DEFAULT_SWAP_MB
             echo "    → 使用推荐值: ${SWAP_MB} MB"
         else
+            validate_positive_int "$INPUT_SWAP" "Swap 文件大小"
             SWAP_MB=$INPUT_SWAP
         fi
 
@@ -364,27 +422,29 @@ esac
 
 if grep -q "$SWAP_FILE" /proc/swaps; then
     echo "⚠️ 检测到已存在 $SWAP_FILE，正在卸载并重新创建..."
-    swapoff $SWAP_FILE
+    swapoff "$SWAP_FILE"
 fi
 
 echo "⏳ 正在创建磁盘 Swap 文件 ($SWAP_FILE)..."
 if $DD_PROGRESS; then
-    dd if=/dev/zero of=$SWAP_FILE bs=1M count=$SWAP_MB status=progress
+    dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$SWAP_MB" status=progress
 else
-    dd if=/dev/zero of=$SWAP_FILE bs=1M count=$SWAP_MB
+    dd if=/dev/zero of="$SWAP_FILE" bs=1M count="$SWAP_MB"
 fi
-chmod 600 $SWAP_FILE
-mkswap $SWAP_FILE
-# 设置低优先级 10
-swapon $SWAP_FILE -p 10
 
-# 写入 fstab 实现开机自动挂载 (如果不存在则添加)
-if ! grep -q "$SWAP_FILE.*swap" /etc/fstab; then
-    echo "$SWAP_FILE none swap sw,pri=10 0 0" >> /etc/fstab
-else
-    # 更新 fstab 中的优先级
-    sed -i "s|^$SWAP_FILE.*|$SWAP_FILE none swap sw,pri=10 0 0|" /etc/fstab
+# 验证 dd 是否成功创建文件
+if [ ! -f "$SWAP_FILE" ]; then
+    echo "❌ 错误: Swap 文件创建失败。"
+    exit 1
 fi
+
+chmod 600 "$SWAP_FILE"
+mkswap "$SWAP_FILE"
+# 设置低优先级 10
+swapon "$SWAP_FILE" -p 10
+
+# 安全写入 fstab 实现开机自动挂载
+safe_fstab_update "$SWAP_FILE" "$SWAP_FILE none swap sw,pri=10 0 0" /etc/fstab
 echo "✅ 磁盘 Swap 配置完成。"
 
 # ==========================================
@@ -404,24 +464,38 @@ fi
 if $ZRAMCTL_AVAILABLE; then
     cat > /usr/local/bin/zram-start.sh << 'EOF'
 #!/bin/bash
-ZRAM_MB=$1
+set -euo pipefail
+
+ZRAM_MB="$1"
+# 验证输入是否为正整数（防注入）
+if ! [[ "$ZRAM_MB" =~ ^[0-9]+$ ]] || [ "$ZRAM_MB" -le 0 ]; then
+    echo "错误: ZRAM 大小必须是正整数" >&2
+    exit 1
+fi
+
 modprobe zram
 # 查找空闲的 zram 设备
-ZRAM_DEV=$(zramctl --find --size ${ZRAM_MB}M --algorithm zstd)
+ZRAM_DEV=$(zramctl --find --size "${ZRAM_MB}M" --algorithm zstd)
 if [ -z "$ZRAM_DEV" ]; then
-    ZRAM_DEV=$(zramctl --find --size ${ZRAM_MB}M --algorithm lzo-rle)
+    ZRAM_DEV=$(zramctl --find --size "${ZRAM_MB}M" --algorithm lzo-rle)
 fi
-mkswap $ZRAM_DEV
-swapon $ZRAM_DEV -p 100
-echo $ZRAM_DEV > /var/run/zram_dev_name
+if [ -z "$ZRAM_DEV" ]; then
+    echo "错误: 无法找到可用的 ZRAM 设备" >&2
+    exit 1
+fi
+mkswap "$ZRAM_DEV"
+swapon "$ZRAM_DEV" -p 100
+echo "$ZRAM_DEV" > /var/run/zram_dev_name
 EOF
 
     cat > /usr/local/bin/zram-stop.sh << 'EOF'
 #!/bin/bash
+set -euo pipefail
+
 if [ -f /var/run/zram_dev_name ]; then
     ZRAM_DEV=$(cat /var/run/zram_dev_name)
-    swapoff $ZRAM_DEV
-    zramctl --reset $ZRAM_DEV
+    swapoff "$ZRAM_DEV" 2>/dev/null || true
+    zramctl --reset "$ZRAM_DEV" 2>/dev/null || true
     rm -f /var/run/zram_dev_name
 fi
 EOF
@@ -429,7 +503,15 @@ else
     # 不支持 zramctl 时的备用方案（通过 sysfs 手动设置）
     cat > /usr/local/bin/zram-start.sh << 'EOF'
 #!/bin/bash
-ZRAM_MB=$1
+set -euo pipefail
+
+ZRAM_MB="$1"
+# 验证输入是否为正整数（防注入）
+if ! [[ "$ZRAM_MB" =~ ^[0-9]+$ ]] || [ "$ZRAM_MB" -le 0 ]; then
+    echo "错误: ZRAM 大小必须是正整数" >&2
+    exit 1
+fi
+
 modprobe zram
 ZRAM_DEV="/dev/zram0"
 # 选择可用的压缩算法
@@ -443,25 +525,28 @@ elif echo "$AVAILABLE_ALGO" | grep -q "lzo"; then
 else
     echo lzo > /sys/block/zram0/comp_algorithm
 fi
-echo ${ZRAM_MB}M > /sys/block/zram0/disksize
-mkswap $ZRAM_DEV
-swapon $ZRAM_DEV -p 100
-echo zram0 > /var/run/zram_dev_name
+echo "${ZRAM_MB}M" > /sys/block/zram0/disksize
+mkswap "$ZRAM_DEV"
+swapon "$ZRAM_DEV" -p 100
+echo "zram0" > /var/run/zram_dev_name
 EOF
 
     cat > /usr/local/bin/zram-stop.sh << 'EOF'
 #!/bin/bash
+set -euo pipefail
+
 if [ -f /var/run/zram_dev_name ]; then
     ZRAM_DEV=$(cat /var/run/zram_dev_name)
-    swapoff /dev/$ZRAM_DEV
-    echo 1 > /sys/block/$ZRAM_DEV/reset
+    swapoff "/dev/$ZRAM_DEV" 2>/dev/null || true
+    echo 1 > "/sys/block/$ZRAM_DEV/reset" 2>/dev/null || true
     rm -f /var/run/zram_dev_name
 fi
 EOF
 fi
 
-chmod +x /usr/local/bin/zram-start.sh
-chmod +x /usr/local/bin/zram-stop.sh
+# 设置严格权限：仅 root 可读写执行（防篡改）
+chmod 700 /usr/local/bin/zram-start.sh
+chmod 700 /usr/local/bin/zram-stop.sh
 
 cat > /etc/systemd/system/zram-auto.service << EOF
 [Unit]
@@ -480,9 +565,13 @@ EOF
 
 # 立即启动并设置开机自启
 systemctl daemon-reload
-systemctl stop zram-auto.service 2>/dev/null
-systemctl enable --now zram-auto.service
-echo "✅ ZRAM 配置完成。"
+systemctl stop zram-auto.service 2>/dev/null || true
+if ! systemctl enable --now zram-auto.service; then
+    echo "⚠️  警告: ZRAM 服务启动失败，请检查日志 (journalctl -u zram-auto.service)"
+    SERVICE_OK=false
+else
+    echo "✅ ZRAM 配置完成。"
+fi
 
 # ==========================================
 # 8. 系统内核参数 (Sysctl) 优化

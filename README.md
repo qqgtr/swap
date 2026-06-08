@@ -23,10 +23,13 @@ curl -sSL https://gh-proxy.org/https://raw.githubusercontent.com/qqgtr/swap/main
 # 1. 下载脚本
 curl -sSL https://gh-proxy.org/https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh
 
-# 2. 赋予执行权限
+# 2. （推荐）验证脚本完整性 — 检查 SHA256
+sha256sum setup_swap_zram.sh
+
+# 3. 赋予执行权限
 chmod +x setup_swap_zram.sh
 
-# 3. 运行脚本（需 root 权限）
+# 4. 运行脚本（需 root 权限）
 sudo ./setup_swap_zram.sh
 ```
 
@@ -42,10 +45,13 @@ curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -
 # 1. 下载脚本
 curl -sSL https://raw.githubusercontent.com/qqgtr/swap/main/setup_swap_zram.sh -o setup_swap_zram.sh
 
-# 2. 赋予执行权限
+# 2. （推荐）验证脚本完整性 — 检查 SHA256
+sha256sum setup_swap_zram.sh
+
+# 3. 赋予执行权限
 chmod +x setup_swap_zram.sh
 
-# 3. 运行脚本（需 root 权限）
+# 4. 运行脚本（需 root 权限）
 sudo ./setup_swap_zram.sh
 ```
 
