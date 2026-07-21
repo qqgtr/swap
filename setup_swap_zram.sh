@@ -551,7 +551,8 @@ chmod 700 /usr/local/bin/zram-stop.sh
 cat > /etc/systemd/system/zram-auto.service << EOF
 [Unit]
 Description=Auto Setup ZRAM
-After=multi-user.target
+Before=swap.target
+After=systemd-modules-load.service
 
 [Service]
 Type=oneshot
